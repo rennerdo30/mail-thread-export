@@ -1,0 +1,147 @@
+---
+title: Fonts
+description: Why the export forces a CJK font stack, why no font files ship with this repository, and how to add Noto Sans JP yourself under the SIL Open Font License.
+---
+
+import { Steps, Aside } from "@astrojs/starlight/components";
+
+## Why the font stack is forced
+
+`forceJapaneseFont()` in `src/content/exporter.js` overrides the font of the clone and every
+descendant with `!important`:
+
+```
+"Hiragino Kaku Gothic Pro", "Meiryo", "Yu Gothic", "MS Gothic", "Noto Sans JP", sans-serif
+```
+
+Rich HTML mail routinely specifies Latin-only web fonts. When `html2canvas` rasterises such a message,
+any CJK character falls through to whatever the browser picks — often producing tofu (`□`) boxes in the
+exported file even though the text looked fine in Gmail. Pinning a stack whose first four entries are
+CJK-capable system fonts avoids that at the cost of discarding the sender's typography.
+
+The stack resolves against fonts **already installed on the machine**:
+
+| Font | Ships with |
+| --- | --- |
+| Hiragino Kaku Gothic Pro | macOS |
+| Meiryo | Windows Vista and later |
+| Yu Gothic | Windows 8.1 and later |
+| MS Gothic | Windows |
+| Noto Sans JP | not preinstalled anywhere — only used if you install it |
+| `sans-serif` | final fallback |
+
+On a typical macOS or Windows machine the first match wins and Noto Sans JP is never reached. On a
+Linux desktop without a Japanese font installed, the stack falls through to `sans-serif` and CJK text
+may still render as boxes.
+
+## Why no font files are in this repository
+
+Earlier revisions of this project carried `NotoSansJP-Regular.ttf` (about 35 MB) and
+`NotoSansJP-Regular.otf` (about 16 MB) in `src/assets/fonts/`, plus copies in the build output.
+
+They were removed, for two reasons:
+
+**Licensing.** Noto Sans JP is licensed under the
+[SIL Open Font License 1.1](https://openfontlicense.org/). The OFL explicitly permits redistribution,
+but it requires that the licence text and the copyright notice accompany every copy of the font. No
+`OFL.txt` was present alongside the files, which made the bundle non-compliant. Shipping fonts
+correctly means shipping their licence — so a repository that is not going to carry the licence should
+not carry the fonts.
+
+**Size.** Roughly 100 MB of duplicated binaries across `src/` and `dist/`, in a repository whose actual
+source is well under 1 MB, and none of it was referenced by any code path: no `import`, no `@font-face`
+rule and no `chrome.runtime.getURL()` call ever loaded them. Only the *name* "Noto Sans JP" appears, in
+the CSS font stack — which resolves against installed fonts, not against files in the extension.
+
+`src/assets/fonts/` and `dist/assets/fonts/` are both gitignored, so adding the files back locally
+cannot re-commit them by accident.
+
+<Aside type="note" title="Nothing broke">
+  Because nothing loaded the files, removing them changed no behaviour. `npm run build` produces the
+  same bundle, and exports render exactly as before.
+</Aside>
+
+## Adding Noto Sans JP yourself
+
+Only worth doing if you need byte-identical output across machines, or you are exporting CJK mail on a
+system with no Japanese font installed.
+
+<Steps>
+
+1. **Download the font.** Get it from
+   [Google Fonts](https://fonts.google.com/noto/specimen/Noto+Sans+JP) or from the
+   [notofonts/noto-cjk](https://github.com/notofonts/noto-cjk) releases. The subsetted `.woff2`
+   variants published by Google Fonts are dramatically smaller than the full `.ttf`/`.otf` — around a
+   few hundred KB per weight against tens of megabytes.
+
+2. **Keep the licence with it.** Download `OFL.txt` alongside the font files and keep it in the same
+   directory. This is an OFL requirement for any redistribution, including a packaged extension you
+   hand to someone else.
+
+3. **Drop the files in.**
+
+   ```sh
+   mkdir -p src/assets/fonts
+   # copy NotoSansJP-Regular.woff2 and OFL.txt into src/assets/fonts/
+   ```
+
+   `copy-webpack-plugin` copies `src/assets` to `dist/assets`, so the files land in
+   `dist/assets/fonts/` on the next build. Both directories are gitignored.
+
+4. **Load the font.** Two options.
+
+   **A — inline it into the bundle.** `webpack.config.cjs` already has a rule that turns any imported
+   `woff|woff2|eot|ttf|otf` into a base64 `asset/inline` data URI, so an `import` is enough:
+
+   ```js title="src/content/exporter.js"
+   import notoSansJP from '../assets/fonts/NotoSansJP-Regular.woff2';
+
+   const style = document.createElement('style');
+   style.textContent = `
+     @font-face {
+       font-family: 'Noto Sans JP Bundled';
+       src: url(${notoSansJP}) format('woff2');
+       font-display: block;
+     }
+   `;
+   document.head.appendChild(style);
+   ```
+
+   Then put `'Noto Sans JP Bundled'` first in the stack in `forceJapaneseFont()` and in the two
+   `cssText` blocks in `exportEmail()`.
+
+   A data URI is the safest route for `html2canvas`, which has to resolve the font while rasterising —
+   there is no extra fetch and no CORS question. The trade-off is bundle size: base64 inflates the
+   file by roughly a third, and the whole thing has to be parsed on every Gmail page load. Use a
+   subsetted `.woff2`, never the full `.ttf`.
+
+   **B — serve it as an extension resource.** `manifest.json` already exposes `assets/*` under
+   `web_accessible_resources`, so `chrome.runtime.getURL('assets/fonts/NotoSansJP-Regular.woff2')`
+   yields a usable `chrome-extension://` URL for a `@font-face` `src`. This keeps the bundle small,
+   but the font loads asynchronously — you must `await document.fonts.load(...)` (or
+   `document.fonts.ready`) before calling `html2canvas`, or the capture may use the fallback font.
+
+5. **Rebuild and verify.** `npm run build`, reload the extension, reload Gmail, and export a message
+   containing Japanese text.
+
+</Steps>
+
+## Fixing tofu without touching the build
+
+If exports show boxes where CJK text should be, installing a Japanese font at the operating-system
+level fixes it for every application, not just this extension:
+
+- **macOS** — Hiragino is preinstalled; nothing to do.
+- **Windows** — Meiryo, Yu Gothic and MS Gothic are preinstalled; nothing to do.
+- **Linux** — install a Noto CJK package, for example `fonts-noto-cjk` on Debian and Ubuntu, or
+  `noto-fonts-cjk` on Arch.
+
+Because the stack ends in `sans-serif`, an OS-level install is picked up immediately with no code
+change.
+
+## Other scripts
+
+The stack covers Japanese specifically. Korean and Chinese mail relies on the `sans-serif` fallback,
+which on macOS and Windows generally still resolves to a font with the necessary coverage. If you need
+guarantees, add `"Noto Sans KR"` / `"Noto Sans SC"` (or the OS-native equivalents) to the stack in
+`forceJapaneseFont()` — a plain string edit, no new files.

@@ -1,0 +1,150 @@
+---
+title: Development
+description: Build scripts, the debug loop for a Manifest V3 content script, how to fix Gmail selector breakage, and how the docs site is built and deployed.
+---
+
+import { Steps, Aside, Tabs, TabItem } from "@astrojs/starlight/components";
+
+## Scripts
+
+Root `package.json`:
+
+| Script | Command | Purpose |
+| --- | --- | --- |
+| `npm run build` | `webpack --config webpack.config.cjs` | One-off production build into `dist/` |
+| `npm run watch` | `webpack … --watch` | Rebuild on save |
+| `npm run install:docs` | `cd docs && npm install` | Install the documentation site's dependencies |
+| `npm run docs:dev` | `cd docs && npm run dev` | Astro dev server |
+| `npm run docs:build` | `cd docs && npm run build` | Static build into `docs/dist` |
+| `npm run docs:preview` | `cd docs && npm run preview` | Serve the built site |
+
+The extension and the documentation site keep separate dependency trees. `npm install` at the root
+does not install the docs dependencies.
+
+## The debug loop
+
+Content scripts are not hot-reloaded, so a change needs three actions:
+
+<Steps>
+
+1. `npm run build` (or leave `npm run watch` running).
+2. Press the reload icon on the extension's card in `chrome://extensions`.
+3. Reload the Gmail tab.
+
+</Steps>
+
+Skipping step 2 leaves the old bundle registered; skipping step 3 leaves the old script running in the
+page.
+
+### Where to look for errors
+
+- **Content script logs** — the Gmail tab's own DevTools console. `Mail Thread Export: content script
+  loaded` confirms injection.
+- **Popup logs** — right-click the toolbar icon, *Inspect popup*.
+- **Service worker logs** — the *service worker* link on the extension card. Nothing is logged, because
+  the worker is empty.
+- **html2canvas internals** — flip `logging: false` to `true` in `generateImagePDF()` /
+  `generateImage()`.
+
+### Inspecting the staged clone
+
+The render wrapper only exists for the ~500 ms settle delay. To look at it, raise the delay in
+`exportEmail()`, or temporarily comment out the `document.body.removeChild(wrapper)` call in the
+`finally` block and change `z-index: -9999` to `9999` so the clone renders on top of the page. Both
+changes must be reverted before shipping.
+
+## Troubleshooting
+
+**The Export button never appears.** Check the console for the load message. If it is missing, the
+content script is not running: confirm the URL is under `https://mail.google.com/`, that the extension
+is enabled, and that you loaded `dist/` rather than the repository root. If the load message *is*
+there, `checkForEmailHeader()` is not finding `h2.hP` — inspect the subject heading and see whether
+Gmail renamed the class.
+
+**The button appears more than once.** The idempotency guard is
+`subject.parentNode.querySelector('.gmail-export-trigger')`. If Gmail restructures the header so the
+subject's parent changes between mutations, the guard misses. Widening the check to the whole
+`div[role="main"]` is the fix.
+
+**`Could not detect email content.`** `detectEmail()` returned `null` because `h2.hP` was absent — you
+are on the message list rather than in a conversation, or the selector is stale.
+
+**Parts of the thread are missing from the export.** `cleanArtifacts()` was too aggressive. The usual
+culprits are the blanket `[data-tooltip]` rule and the SVG/`path` rule that hides any icon whose
+ancestor looks like a button. Comment out the selector list and reintroduce entries until the
+offending one shows up.
+
+**The export is blank.** Usually a canvas size limit on a very long thread. Log
+`canvas.width`/`canvas.height` after the `html2canvas` call; browsers cap sides at roughly 32,767 px
+and also cap total area.
+
+## Fixing Gmail selector breakage
+
+Gmail ships obfuscated, unstable class names. When an export starts including interface chrome again:
+
+1. Export a thread and note exactly what leaked in.
+2. Inspect the offending element in Gmail's DOM and prefer a **stable** hook over a class name — an
+   ARIA role, a `role="button"` with a known `aria-label`, or a `data-tooltip` value.
+3. Add it to `selectorsToHide` in `cleanArtifacts()`. Add the German label as well as the English one:
+   the list already pairs them (`Reply`/`Antworten`, `Forward`/`Weiterleiten`, `Delete`/`Löschen`, …),
+   and any new entry should follow that convention.
+4. Rebuild and re-export the same thread to confirm.
+
+Prefer hiding (`display: none !important`) over removing. Removal can break layout in the clone;
+hiding leaves the tree intact.
+
+## Coding conventions
+
+- **ES modules** throughout `src/` (`"type": "module"` in `package.json`); `webpack.config.cjs` is
+  CommonJS because webpack loads it with `require`.
+- **No framework.** Everything is plain DOM APIs — deliberate, to keep the content-script bundle as
+  small as html2canvas and jsPDF allow.
+- **Interface strings are English-only in the injected UI** ("Export", "Export as PDF",
+  "Export as Image", "Processing…"), while the *selector* lists match both English and German Gmail.
+  Adding a locale means extending those selector lists, not just translating the button labels.
+- **Never mutate the live Gmail DOM** beyond appending the export button and the temporary wrapper.
+  All cleanup happens on the clone.
+
+## Documentation site
+
+The site is Astro + Starlight with the Galaxy theme.
+
+```sh
+npm run install:docs
+npm run docs:dev
+npm run docs:build
+```
+
+- Pages are MDX under `docs/src/content/docs/`; every page needs `title` and `description`
+  frontmatter.
+- The sidebar is declared explicitly in `docs/astro.config.mjs` — a new page must be added there to
+  appear.
+- `site` and `base` are set to `https://rennerdo30.github.io/mail-thread-export` and
+  `/mail-thread-export`. Because of `base`, internal links written by hand must include that prefix.
+- Accent colours are overridden in `docs/src/styles/custom.css`; both dark and light modes are
+  defined.
+
+### Deployment
+
+`.github/workflows/deploy.yml` runs on every push to `main` and on manual dispatch. It checks out the
+repository, sets up Node 20 with npm caching keyed on `docs/package-lock.json`, runs `npm ci` and
+`npm run build` in `docs/`, uploads `docs/dist` as a Pages artifact, and deploys it with
+`actions/deploy-pages`. Permissions are `contents: read`, `pages: write`, `id-token: write`, and
+concurrent runs are grouped under `pages`.
+
+<Aside type="note" title="`docs/package-lock.json` must be committed">
+  The workflow uses `npm ci`, which requires a lockfile. `docs/package-lock.json` is committed;
+  `docs/node_modules` and `docs/dist` are not.
+</Aside>
+
+GitHub Pages must be set to the **GitHub Actions** source in the repository settings before the first
+deployment can succeed.
+
+## Ideas worth doing
+
+- Wire up the popup, or remove it and the unused `activeTab`/`scripting`/`downloads` permissions.
+- Delete the empty service worker declaration, or give it a purpose.
+- Remove the unused `src/lib/` UMD builds.
+- Emit a real multi-page PDF for long threads instead of one oversized page, sidestepping the canvas
+  size limit.
+- Expand collapsed messages and trimmed quoted text automatically before capture.

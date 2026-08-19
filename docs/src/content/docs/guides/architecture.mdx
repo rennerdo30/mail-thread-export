@@ -1,0 +1,162 @@
+---
+title: Architecture
+description: How Mail Thread Export is put together — the MV3 surfaces, the content script, the render pipeline, and the parts that are dead code.
+---
+
+import { FileTree, Aside } from "@astrojs/starlight/components";
+
+## Source layout
+
+<FileTree>
+
+- src
+  - manifest.json MV3 manifest
+  - content
+    - scanner.js **webpack entry** — injects the button, observes the DOM
+    - exporter.js clone, clean, render, output
+    - style.css styles for the injected button and dropdown
+  - popup
+    - index.html toolbar popup markup
+    - script.js popup logic (not wired to the content script)
+    - style.css popup styles
+  - background
+    - service-worker.js declared in the manifest, currently empty
+  - assets
+    - icon48.png
+    - icon128.png
+  - lib vendored standalone builds, unused by the webpack build
+- webpack.config.cjs
+- dist build output (gitignored)
+- docs this documentation site
+
+</FileTree>
+
+## Manifest V3 surfaces
+
+Three surfaces are declared in `src/manifest.json`; only the first carries the working feature.
+
+**Content script** — `content.js` plus `style.css`, matched on `https://mail.google.com/*` at
+`document_idle`. This is the whole product.
+
+**Action popup** — `popup/index.html`. Present and styled, but non-functional (see below).
+
+**Service worker** — `background/service-worker.js`, an empty file. It exists so the declared entry
+resolves and the manifest stays valid.
+
+## Injection: `scanner.js`
+
+The Gmail web UI is a single-page app, so there is no load event to hook. `scanner.js` instead
+observes the whole document:
+
+```js
+const observer = new MutationObserver(() => { checkForEmailHeader(); });
+observer.observe(document.body, { childList: true, subtree: true });
+```
+
+`checkForEmailHeader()` looks for `div[role="main"]`, then for the subject heading `h2.hP` inside it.
+If a subject exists and its parent does not already contain `.gmail-export-trigger`, `injectMenu()`
+builds a relatively-positioned wrapper containing the trigger button and an absolutely-positioned
+dropdown, and appends it to the subject's parent. The presence check is what keeps the very chatty
+observer idempotent.
+
+Clicking a menu item swaps the item's contents for a spinner, defers the actual work by 50 ms with
+`setTimeout` so the spinner gets a chance to paint, awaits the export, then restores the item and
+closes the menu. A document-level `click` listener closes any open menu when the click lands outside
+the trigger and the menu.
+
+`detectEmail()` returns `{ subject, element }` where `subject` is the text of `h2.hP` and `element` is
+`div[role="main"]` — the whole conversation pane, which is what gets exported.
+
+<Aside type="caution" title="Selector fragility">
+  `h2.hP` and the class names in `cleanArtifacts()` are Gmail's own obfuscated identifiers. They are
+  not a public API and can change at any time. `div[role="main"]` is the one durable hook, because it
+  is an ARIA landmark.
+</Aside>
+
+## Render pipeline: `exporter.js`
+
+`Exporter.exportEmail(element, format, filenameBase)` runs six steps:
+
+1. **Clone** — `element.cloneNode(true)`. The live Gmail DOM is never touched.
+2. **Clean** — `cleanArtifacts(clone)` removes or hides the Gmail interface and normalises
+   backgrounds. Full breakdown in
+   [Configuration](/mail-thread-export/getting-started/configuration/#gmail-selectors).
+3. **Force fonts** — `forceJapaneseFont(clone)` sets a CJK-capable stack with `!important` on the
+   clone and every descendant.
+4. **Stage off-screen** — the clone goes into a `position: fixed`, `z-index: -9999`, 800 px-wide
+   wrapper with a padded white inner container and the subject/timestamp header, appended to
+   `document.body`. It is in the layout tree (so it has real dimensions) but behind the page.
+5. **Settle, measure, capture** — wait 500 ms, read `paddedContent.scrollHeight + 50`, then call
+   `html2canvas` at `scale: 2` with an explicit width and height.
+6. **Emit** — `generateImagePDF()` puts a `0.95`-quality JPEG into a jsPDF page sized to
+   `canvas.width / 2` × `canvas.height / 2` and calls `pdf.save()`. `generateImage()` calls
+   `canvas.toDataURL()` and clicks a synthetic `<a download>`.
+
+A `finally` block removes the wrapper from the DOM whether the export succeeded or threw.
+
+### Why a raster PDF
+
+`SPECIFICATION.md` records the reasoning: vector-based approaches (jsPDF's own HTML handling) proved
+unstable against Gmail's deeply nested, heavily styled DOM. Rasterising trades away selectable text
+for output that reliably looks like what you saw on screen.
+
+### Off-screen staging with `z-index: -9999`
+
+The clone must be laid out for `scrollHeight` to be meaningful and for `html2canvas` to read computed
+styles, so it cannot be `display: none`. Fixed positioning behind the page keeps it measurable while
+invisible. The consequence is that for those ~500 ms the document really does contain a second copy of
+the conversation.
+
+## Build
+
+Webpack bundles `scanner.js` — which statically imports `exporter.js`, and through it `jspdf` and
+`html2canvas` from `node_modules` — into one minified `dist/content.js` of roughly 770 KiB.
+`LimitChunkCountPlugin({ maxChunks: 1 })` is essential: an MV3 content script has no loader for
+additional chunks. `copy-webpack-plugin` moves the manifest, the injected stylesheet, the icons, the
+popup and the background script across unchanged.
+
+`src/lib/` holds standalone UMD builds of html2canvas 1.4.1 and jsPDF 2.5.1 from an earlier iteration.
+Nothing imports them and the manifest does not reference them; the versions actually shipped are the
+ones in `package.json`.
+
+## The unwired popup
+
+`src/popup/script.js` queries the active tab, checks the URL contains `mail.google.com`, then sends
+`{ action: 'PING' }` with `chrome.tabs.sendMessage` and expects `{ status: 'READY', subject }` back.
+Its export cards send `{ action: 'EXPORT', format }` and expect `{ success: true }`.
+
+No `chrome.runtime.onMessage.addListener` exists anywhere in `src/`. Every send therefore rejects with
+"Could not establish connection", the popup lands in its error branch, and the cards stay disabled.
+
+Making it work would mean adding to `scanner.js`:
+
+- a listener for `PING` that runs `detectEmail()` and replies with the subject (or a not-ready state);
+- a listener for `EXPORT` that calls `Exporter.exportEmail()` and replies with the outcome;
+- `return true` from the listener to keep the message channel open across the `await`, since the
+  export is asynchronous.
+
+The popup's JPG card would additionally need `handleExport`/`exportEmail` to pass `'jpg'` through to
+`generateImage()`, which already supports it.
+
+## Data flow
+
+```
+Gmail SPA DOM
+  │  MutationObserver (scanner.js)
+  ▼
+h2.hP found → Export button injected
+  │  click
+  ▼
+detectEmail() → { subject, div[role="main"] }
+  │
+  ▼
+exportEmail(): clone → cleanArtifacts → forceJapaneseFont
+  │
+  ▼
+off-screen 800px wrapper + header  ──500ms──▶  html2canvas (scale 2)
+  │
+  ├─ pdf  → JPEG 0.95 → jsPDF single page → pdf.save()
+  └─ png  → toDataURL → <a download>.click()
+```
+
+Nothing in that path crosses the network or leaves the tab.

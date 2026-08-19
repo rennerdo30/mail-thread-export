@@ -1,0 +1,84 @@
+---
+title: Installation
+description: Build Mail Thread Export from source and load it unpacked into a Chromium-based browser.
+---
+
+import { Steps, Aside, Tabs, TabItem } from "@astrojs/starlight/components";
+
+The extension is not published to the Chrome Web Store, so it has to be built once and loaded
+unpacked.
+
+## Requirements
+
+- A Chromium-based browser with Manifest V3 support: Chrome, Edge, Brave, Vivaldi or Opera.
+- **Node.js 20 or newer** and npm, to run the webpack build.
+
+## Build and load
+
+<Steps>
+
+1. **Clone and install dependencies**
+
+   ```sh
+   git clone https://github.com/rennerdo30/mail-thread-export.git
+   cd mail-thread-export
+   npm install
+   ```
+
+2. **Build the extension**
+
+   ```sh
+   npm run build
+   ```
+
+   This runs webpack in `production` mode. It bundles `src/content/scanner.js` (and everything it
+   imports, including `jspdf` and `html2canvas`) into a single `dist/content.js`, and copies the
+   manifest, the injected stylesheet, the icons, the popup and the background script into `dist/`.
+
+3. **Open the extensions page**
+
+   Navigate to `chrome://extensions` (`edge://extensions` on Edge, `brave://extensions` on Brave).
+
+4. **Enable Developer mode**
+
+   The toggle sits in the top-right corner of the extensions page.
+
+5. **Load the `dist/` directory**
+
+   Click **Load unpacked** and select the **`dist/`** folder — not the repository root. The manifest
+   lives in `dist/manifest.json` after the build.
+
+6. **Reload any open Gmail tab**
+
+   Content scripts are only injected on page load, so a Gmail tab that was already open before
+   installing will not have the Export button until you reload it.
+
+</Steps>
+
+<Aside type="caution" title="`dist/` is gitignored">
+  A fresh clone contains no build output. `npm run build` is mandatory before the first load, and
+  after every change to anything in `src/`.
+</Aside>
+
+## Verify it works
+
+1. Open `https://mail.google.com/` and open any conversation.
+2. An **Export** button should appear immediately to the right of the subject heading.
+3. The browser console should contain `Mail Thread Export: content script loaded`.
+
+If the button is missing, see [Development](/mail-thread-export/guides/development/#troubleshooting).
+
+## Rebuilding while you work
+
+```sh
+npm run watch
+```
+
+Webpack stays running and rebuilds `dist/` on every save. You still have to press the reload icon on
+the extension card in `chrome://extensions` and reload the Gmail tab, because content scripts are not
+hot-reloaded.
+
+## Uninstalling
+
+Remove the extension from `chrome://extensions`. Nothing is stored outside the extension directory —
+there are no preferences, no cached data and no server-side state to clean up.

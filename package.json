@@ -1,0 +1,35 @@
+{
+  "name": "mail-thread-export",
+  "version": "1.0.0",
+  "description": "Chrome MV3 extension that exports the open Gmail conversation to PDF or PNG entirely in the browser.",
+  "private": true,
+  "type": "module",
+  "author": "rennerdo30",
+  "license": "MIT",
+  "keywords": [
+    "chrome-extension",
+    "manifest-v3",
+    "gmail",
+    "pdf",
+    "export",
+    "html2canvas",
+    "jspdf"
+  ],
+  "scripts": {
+    "build": "webpack --config webpack.config.cjs",
+    "watch": "webpack --config webpack.config.cjs --watch",
+    "docs:dev": "cd docs && npm run dev",
+    "docs:build": "cd docs && npm run build",
+    "docs:preview": "cd docs && npm run preview",
+    "install:docs": "cd docs && npm install"
+  },
+  "devDependencies": {
+    "copy-webpack-plugin": "^13.0.1",
+    "webpack": "^5.104.1",
+    "webpack-cli": "^6.0.1"
+  },
+  "dependencies": {
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.0.0"
+  }
+}

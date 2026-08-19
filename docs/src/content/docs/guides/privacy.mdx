@@ -1,0 +1,95 @@
+---
+title: Privacy & Permissions
+description: What Mail Thread Export can access, what it actually does, and which declared permissions are unnecessary.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+## The short version
+
+Mail Thread Export reads the conversation you are looking at, renders it to a file, and hands that
+file to your browser's download mechanism. It makes **no network requests of its own**, stores nothing,
+and has no server component.
+
+## What is declared
+
+`src/manifest.json`:
+
+```json
+"permissions": ["activeTab", "scripting", "downloads"],
+"host_permissions": ["https://mail.google.com/*"],
+"web_accessible_resources": [
+  { "resources": ["assets/*"], "matches": ["<all_urls>"] }
+]
+```
+
+| Declared | Used by the working code path? |
+| --- | --- |
+| `host_permissions: https://mail.google.com/*` | **Yes** — required to inject the content script |
+| `activeTab` | No |
+| `scripting` | No — the content script is declared statically in the manifest, never injected programmatically |
+| `downloads` | No — PDFs go out via `jsPDF.save()` and images via a synthetic `<a download>` click, both of which use the ordinary download path available to any page |
+| `web_accessible_resources: assets/*` with `<all_urls>` | Not currently needed; nothing loads an asset by URL |
+
+<Aside type="caution" title="Over-declared permissions">
+  Three of the four `permissions` entries are unused, and the `web_accessible_resources` match pattern
+  is broader than necessary. A `<all_urls>` web-accessible resource is enumerable by any site, which
+  makes the extension fingerprintable. Trimming the list to just the host permission would be
+  strictly better, and would also reduce the install-time warning Chrome shows. See the
+  [Development](/mail-thread-export/guides/development/#ideas-worth-doing) notes.
+</Aside>
+
+## What the code actually touches
+
+**Reads** `document.querySelector('h2.hP')` for the subject and `div[role="main"]` for the conversation
+pane, both inside the Gmail tab.
+
+**Writes** to the Gmail DOM: appends one button plus dropdown next to the subject heading, and — for the
+duration of an export, roughly half a second plus render time — one off-screen wrapper containing a
+clone of the conversation. Both are removed afterwards; the wrapper removal is in a `finally` block so
+it happens even when the render throws.
+
+**Sends** one download to the browser, containing only the rendered conversation.
+
+## What the code does not do
+
+- No `fetch`, `XMLHttpRequest`, `WebSocket` or `sendBeacon` anywhere in `src/`.
+- No `chrome.storage`, no `localStorage`, no cookies, no IndexedDB.
+- No analytics, telemetry, crash reporting or update pings.
+- No account, no login, no API key or token of any kind.
+- No access to any origin other than `mail.google.com` — content scripts are scoped by the manifest's
+  `matches` pattern.
+- No reading of message *data* through Gmail's APIs. It only reads what is already rendered in the tab.
+
+You can confirm the absence of network calls yourself: open DevTools on the Gmail tab, filter the
+Network panel to XHR/Fetch, and run an export. Nothing new appears.
+
+## Where exported files go
+
+Straight to your browser's configured download directory, through the normal download flow. The
+extension never sees the file after handing it over, and never uploads it.
+
+Because exports are ordinary files containing the full text of private mail, treat them accordingly.
+The repository's `.gitignore` excludes `*.pdf` and `*.png` (with the extension icons explicitly
+re-included) precisely so a test export cannot be committed by accident.
+
+## Remote content in an export
+
+`html2canvas` runs with `useCORS: true`, so it attempts to load cross-origin images the message
+references. Those loads are made by the *page*, exactly as they would be when you view the message in
+Gmail — the extension adds no request that Gmail has not already made. Images from hosts that do not
+send permissive CORS headers cannot be read into the canvas and are simply absent from the output.
+
+## Third-party code
+
+Two libraries are bundled into `dist/content.js`:
+
+| Library | Version | Licence |
+| --- | --- | --- |
+| [html2canvas](https://html2canvas.hertzen.com/) | 1.4.x | MIT |
+| [jsPDF](https://github.com/parallax/jsPDF) | 4.x | MIT |
+
+Neither phones home. `src/lib/` additionally holds older standalone copies of both, which are dead code
+— nothing imports them and the manifest does not reference them.
+
+No fonts are bundled; see the [Fonts guide](/mail-thread-export/guides/fonts/).

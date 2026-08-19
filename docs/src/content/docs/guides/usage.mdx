@@ -1,0 +1,84 @@
+---
+title: Usage
+description: How to export a Gmail conversation to PDF or PNG, what the output looks like, and what to do when it goes wrong.
+---
+
+import { Steps, Aside } from "@astrojs/starlight/components";
+
+## Exporting a conversation
+
+<Steps>
+
+1. Open `https://mail.google.com/` and open a conversation, so the subject heading is visible.
+
+2. Click the **Export** button immediately to the right of the subject. It is styled to match Gmail's
+   own pill buttons and turns blue while its menu is open.
+
+3. Pick an entry:
+
+   - **Export as PDF** — a single-page PDF containing a JPEG render of the thread.
+   - **Export as Image** — a 2x PNG of the same render.
+
+4. The menu entry swaps to a spinner and *Processing…* while the render runs, then the browser
+   downloads `<subject>.pdf` or `<subject>.png` and the menu closes.
+
+</Steps>
+
+Clicking anywhere outside the button or the menu closes it.
+
+## What the output contains
+
+- A header with the **conversation subject** (truncated to 100 characters) and the **time you ran the
+  export**, in your browser's locale format.
+- The full thread as displayed, at a fixed **800 px** layout width with 40 px of white padding.
+- No Gmail interface: no toolbar, no reply/forward/more buttons, no stars, no labels, no banners.
+- Light grey Gmail backgrounds flattened to white.
+
+<Aside type="note" title="The timestamp is the export time">
+  The date printed in the header is `new Date()` at export time — not the date the message was sent.
+  Message dates remain visible inside the captured thread itself wherever Gmail was showing them.
+</Aside>
+
+## Practical notes
+
+**Expand what you want captured first.** The extension captures the DOM as it currently stands inside
+`div[role="main"]`. Collapsed messages in a long thread, truncated quoted text behind the
+"…" trimmed-content button, and unexpanded image attachments are captured in their collapsed state.
+Expand them in Gmail *before* clicking Export.
+
+**Scrolling does not matter.** The clone is rendered off-screen at full height, so you do not need to
+scroll through the thread first.
+
+**Long threads take a few seconds.** Rasterising at `scale: 2` is CPU-bound and runs on the page's
+main thread, so Gmail may feel briefly unresponsive on very long conversations.
+
+**Very long threads can hit canvas limits.** Browsers cap canvas dimensions (commonly around 32,767
+px per side, with an additional total-area cap). A thread that renders taller than that will fail or
+come back blank. Splitting the export — for example by opening individual messages — is the
+workaround.
+
+**Filenames come from the subject.** The subject text is used verbatim as the filename base, so the
+browser's own sanitising decides what happens to characters like `/` or `:`.
+
+## When something goes wrong
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| No **Export** button | Content script not injected, or no conversation open | Reload the Gmail tab; make sure a conversation is open, not the message list |
+| `Could not detect email content.` alert | `h2.hP` (the subject heading) was not found | Open an actual conversation; if Gmail changed its markup, the selector in `detectEmail()` needs updating |
+| `Export Failed: …` alert | The render threw | Open DevTools; the full error is logged to the console |
+| Blank or truncated output | Canvas size limit, or the cleanup heuristics removed too much | See the canvas note above and `cleanArtifacts()` in [Configuration](/mail-thread-export/getting-started/configuration/#gmail-selectors) |
+| Missing remote images | Those hosts do not send permissive CORS headers | Not fixable from a content script |
+| CJK text renders as boxes | No CJK font installed | See the [Fonts guide](/mail-thread-export/guides/fonts/) |
+| The toolbar popup says *Please refresh Gmail tab* | The popup is not wired to the content script | Expected — use the injected Export button instead |
+
+## The toolbar popup
+
+Clicking the extension icon in the browser toolbar opens a popup with PDF, PNG and JPG cards. **It
+does not work.** The popup sends `PING` and `EXPORT` messages with `chrome.tabs.sendMessage`, but the
+content script registers no `chrome.runtime.onMessage` listener, so the send always rejects and the
+popup settles on *Reload Page* / *Please refresh Gmail tab*.
+
+The injected Export button is the working entry point. See
+[Architecture](/mail-thread-export/guides/architecture/#the-unwired-popup) for what wiring it up would
+involve.

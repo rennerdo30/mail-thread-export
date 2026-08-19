@@ -1,0 +1,119 @@
+---
+title: Configuration
+description: There is no settings UI — every tunable value in Mail Thread Export lives in source. This page lists all of them and where to change them.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="note" title="No runtime configuration">
+  Mail Thread Export has **no options page, no settings UI, no environment variables and no stored
+  preferences**. It does not request the `storage` permission. Everything below is a source-level
+  constant that takes effect after `npm run build`.
+</Aside>
+
+## Render options
+
+All of these live in `src/content/exporter.js`.
+
+| Value | Default | Location | Effect |
+| --- | --- | --- | --- |
+| Wrapper width | `800px` | `wrapper.style.cssText` | Layout width the conversation is re-flowed to before capture. |
+| `html2canvas` `width` / `windowWidth` | `800` | `generateImagePDF()`, `generateImage()` | Must match the wrapper width, or the capture is clipped or padded. |
+| `html2canvas` `scale` | `2` | `generateImagePDF()`, `generateImage()` | Device-pixel multiplier. `1` halves file size and sharpness; `3` triples memory use. |
+| Content padding | `40px` | `paddedContent.style.cssText` | White margin around the exported content. |
+| `backgroundColor` | `#ffffff` | both generators | Canvas background where the DOM is transparent. |
+| `useCORS` | `true` | both generators | Attempt to load cross-origin images. Images from hosts without permissive CORS headers are dropped from the capture regardless. |
+| `foreignObjectRendering` | `false` | both generators | Kept off — the `foreignObject` path is faster but renders Gmail's DOM inconsistently. |
+| `logging` | `false` | both generators | Set to `true` to get html2canvas' own trace in the console. |
+| Settle delay | `500` ms | `exportEmail()` | `await new Promise(r => setTimeout(r, 500))` before measuring and capturing, giving the browser time to lay out the clone and load images. Raise it for image-heavy threads. |
+| Height measurement | `paddedContent.scrollHeight + 50` | `exportEmail()` | The `+ 50` is slack so the last line is never clipped. |
+
+## PDF output
+
+| Value | Default | Location |
+| --- | --- | --- |
+| Image codec embedded in the PDF | JPEG at quality `0.95` | `canvas.toDataURL('image/jpeg', 0.95)` |
+| Page units | `px` | `new jsPDF({ unit: 'px' })` |
+| Page format | `[canvas.width / 2, canvas.height / 2]` | `generateImagePDF()` — the `/ 2` undoes `scale: 2`, so the page matches CSS pixels |
+| Orientation | `l` if the canvas is wider than tall, otherwise `p` | `generateImagePDF()` |
+| Filename | `<subject>.pdf` via `pdf.save()` | `generateImagePDF()` |
+
+Switching the codec to `canvas.toDataURL('image/png')` and passing `'PNG'` to `pdf.addImage()` gives
+lossless output at a considerably larger file size.
+
+## Image output
+
+| Value | Default | Location |
+| --- | --- | --- |
+| MIME type | `image/png` (`image/jpeg` when called with `'jpg'`) | `generateImage()` |
+| Quality argument | `1.0` | `canvas.toDataURL(mimeType, 1.0)` — ignored for PNG |
+| Download mechanism | a synthetic `<a download>` click | `generateImage()` |
+
+`generateImage()` already accepts `'jpg'`, but the injected menu only ever calls it with `'png'`.
+
+## Export header
+
+`exportEmail()` prepends a header block to the clone:
+
+| Value | Default | Location |
+| --- | --- | --- |
+| Title text | `filenameBase.substring(0, 100)` — the conversation subject, truncated to 100 characters | `h1.innerText` |
+| Title style | `20px`, bold | `h1.style.cssText` |
+| Timestamp | `new Date().toLocaleString()` — the *export* time, not the message date, rendered in the browser locale | `date.innerText` |
+| Timestamp style | `11px`, `#5f6368` | `date.style.cssText` |
+| Separator | `1px solid #ddd`, `25px` bottom margin | `header.style.cssText` |
+
+## Font stack
+
+`forceJapaneseFont()` applies one stack to the clone and to every descendant with `!important`:
+
+```
+"Hiragino Kaku Gothic Pro", "Meiryo", "Yu Gothic", "MS Gothic", "Noto Sans JP", sans-serif
+```
+
+This deliberately overrides whatever fonts the mail specified, to guarantee CJK glyph coverage. See
+the [Fonts guide](/mail-thread-export/guides/fonts/) for how the stack resolves and how to add Noto
+Sans JP yourself.
+
+## Gmail selectors
+
+`cleanArtifacts()` holds the list of things stripped from the clone. This is the part most likely to
+need maintenance, because Gmail's obfuscated class names change without notice.
+
+- **Removed outright:** the extension's own UI, every `[role="toolbar"]`, and elements whose
+  `data-tooltip` contains `Reply`, `Forward`, `Antworten` or `Weiterleiten`.
+- **Hidden via `display: none !important`:** a list of `aria-label` selectors (English *and* German),
+  `[role="alert"]`, roughly thirty Gmail class names (`.hI`, `.fv`, `.at`, `.gE`, `.T-I`, `.bAo`, …),
+  and everything carrying a `data-tooltip` attribute.
+- **Heuristics:** short text nodes matching known interface phrases have their nearest
+  `[role="button"]` / `.T-I` / `[data-tooltip]` ancestor hidden; `svg` and `path` elements inside a
+  button-like ancestor are hidden unless they sit inside the message body (`.a3s`).
+- **Colour normalisation:** any computed background that is a light grey (channels within 10 of each
+  other and above 200) is forced to `#ffffff`; the clone's own text colour is forced to `#202124`.
+
+<Aside type="caution" title="The heuristics are aggressive">
+  Hiding *everything* with a `data-tooltip`, and every icon inside a button-like ancestor, can also
+  remove legitimate content from unusual messages. If part of a thread goes missing from an export,
+  `cleanArtifacts()` is the first place to look.
+</Aside>
+
+## Build configuration
+
+`webpack.config.cjs`:
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| `mode` | `production` | Minified output. |
+| `entry.content` | `./src/content/scanner.js` | The only bundled entry point. |
+| `output.path` | `dist/` | What you load unpacked. |
+| `LimitChunkCountPlugin` `maxChunks` | `1` | MV3 content scripts cannot load extra chunks at runtime, so everything must be in one file. |
+| Font rule | `asset/inline` for `woff|woff2|eot|ttf|otf` | Any *imported* font becomes a base64 data URI in the bundle. No font is currently imported. |
+| `CopyPlugin` patterns | `manifest.json`, `content/style.css`, `assets/`, `popup/`, `background/` | Copied verbatim; the last three use `noErrorOnMissing`. |
+| `performance.hints` | `false` | The bundle is legitimately large (~770 KiB) because html2canvas and jsPDF are inlined. |
+
+## Manifest
+
+`src/manifest.json` declares `activeTab`, `scripting` and `downloads`, plus the host permission
+`https://mail.google.com/*` and a `<all_urls>` `web_accessible_resources` entry for `assets/*`. Only
+the host permission is actually needed by the working code path — see
+[Privacy & Permissions](/mail-thread-export/guides/privacy/).

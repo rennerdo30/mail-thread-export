@@ -1,0 +1,82 @@
+---
+title: Mail Thread Export
+description: Chrome MV3 extension that exports the open Gmail conversation to a single-page PDF or a high-resolution PNG, entirely in the browser.
+template: splash
+hero:
+  tagline: Export the mail thread you are reading to a clean, single-page PDF or PNG — locally, with no network calls.
+  actions:
+    - text: Install it
+      link: /mail-thread-export/getting-started/installation/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/rennerdo30/mail-thread-export
+      icon: external
+---
+
+import { Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+## What it is
+
+Mail Thread Export is a Chrome extension (Manifest V3) that injects an **Export** button next to the
+subject line of the Gmail conversation you have open. Choosing *Export as PDF* or *Export as Image*
+clones the conversation DOM, removes the surrounding Gmail interface, rasterises the result with
+`html2canvas` at 2x, and hands you a file.
+
+<Aside type="note" title="Trademark">
+  This is an independent project. It is not affiliated with, endorsed by, or sponsored by Google.
+  "Gmail" is a trademark of Google LLC and appears here only to describe the site the extension
+  works on.
+</Aside>
+
+## Why not just print to PDF
+
+Gmail's print view introduces page breaks, its own headers and footers, and a print stylesheet that
+frequently mangles the layout of rich HTML mail. This extension captures what is actually on screen
+instead, and writes it to a **single continuous page** sized to the content.
+
+## Features
+
+<CardGrid stagger>
+  <Card title="Injected into Gmail" icon="star">
+    A pill-shaped `Export` button appears beside the subject heading, with a dropdown offering PDF
+    and image output. A `MutationObserver` re-injects it whenever Gmail swaps in another
+    conversation.
+  </Card>
+  <Card title="One continuous page" icon="document">
+    The PDF page is sized to the rendered canvas, so long threads are never cut in half by a page
+    break.
+  </Card>
+  <Card title="Interface stripped" icon="approve-check">
+    Toolbars, reply/forward/more buttons, stars, labels, alerts and tooltip-bearing controls are
+    removed from the clone. English and German Gmail labels are both recognised.
+  </Card>
+  <Card title="Stable 800 px layout" icon="setting">
+    The clone renders at a fixed desktop width, so output does not depend on your window size.
+  </Card>
+  <Card title="CJK-safe font stack" icon="translate">
+    The export forces a Japanese-capable font stack so CJK mail does not render as tofu boxes.
+  </Card>
+  <Card title="No network, no storage" icon="seti:lock">
+    No fetch calls, no analytics, no accounts, no `storage` permission. Everything happens in the
+    page.
+  </Card>
+</CardGrid>
+
+## What it does not do
+
+- The **toolbar popup is non-functional** — it messages a listener the content script never
+  registers. Use the injected Export button. See [Architecture](/mail-thread-export/guides/architecture/).
+- The PDF holds a **raster image**, so its text is not selectable or searchable.
+- It targets **Gmail's web UI only**; other webmail is not supported.
+
+## Next steps
+
+<CardGrid>
+  <Card title="Installation" icon="rocket">
+    Build from source and load unpacked — [Installation](/mail-thread-export/getting-started/installation/).
+  </Card>
+  <Card title="Configuration" icon="setting">
+    Every tunable value and where to change it — [Configuration](/mail-thread-export/getting-started/configuration/).
+  </Card>
+</CardGrid>
