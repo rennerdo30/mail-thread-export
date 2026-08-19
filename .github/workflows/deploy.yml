@@ -14,15 +14,19 @@ concurrency:
   group: pages
   cancel-in-progress: true
 
+env:
+  # Astro 7 requires Node >= 22.12.0 (see docs/package.json engines).
+  NODE_VERSION: "22"
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: docs/package-lock.json
 
@@ -34,7 +38,7 @@ jobs:
         working-directory: docs
         run: npm run build
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: docs/dist
 

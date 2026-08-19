@@ -24,9 +24,9 @@
     "install:docs": "cd docs && npm install"
   },
   "devDependencies": {
-    "copy-webpack-plugin": "^13.0.1",
+    "copy-webpack-plugin": "^14.0.0",
     "webpack": "^5.109.2",
-    "webpack-cli": "^6.0.1"
+    "webpack-cli": "^7.2.2"
   },
   "dependencies": {
     "html2canvas": "^1.4.1",
